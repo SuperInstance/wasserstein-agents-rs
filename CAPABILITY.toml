@@ -1,0 +1,80 @@
+[crate]
+name = "wasserstein-agents-rs"
+version = "0.1.0"
+layer = "distribution"
+description = "Wasserstein distance, optimal transport, and agent distribution coordination"
+
+[provides]
+capabilities = [
+  { name = "optimal_transport", type = "module", description = "Sinkhorn algorithm for entropy-regularized optimal transport with cost matrices" },
+  { name = "agent_distribution", type = "struct", description = "Multi-agent fleet distribution with weights and positions" },
+  { name = "barycenter", type = "module", description = "Wasserstein barycenters: 1D quantile, free support, and Sinkhorn variants" },
+  { name = "gradient_flow", type = "module", description = "JKO scheme for Wasserstein gradient flow and distribution evolution" },
+  { name = "sliced_wasserstein", type = "module", description = "Sliced Wasserstein distances (SW1, SW2, custom) for fast approximations" }
+]
+exports = [
+  "transport::OptimalTransport",
+  "transport::SinkhornSolver",
+  "agents::AgentDistribution",
+  "barycenter::barycenter_1d_quantile",
+  "barycenter::barycenter_free_support",
+  "barycenter::barycenter_sinkhorn",
+  "barycenter::dist_w2",
+  "gradient_flow::JKOScheme",
+  "sliced::sliced_wasserstein_1",
+  "sliced::sliced_wasserstein_2",
+  "sliced::sliced_wasserstein_custom"
+]
+
+[requires]
+optional = [
+  { crate = "categorical-agents-rs", reason = "Compose transport plans with monadic agent operations", import = "monad::ListMonad" },
+  { crate = "optimal-transport-rs", reason = "Extended transport algorithms and dual formulations", import = "dual::DualSolver" }
+]
+
+[integrates.categorical_agents]
+crate = "categorical-agents-rs"
+module = "agents"
+description = "Categorical transport: lift agent distributions into monadic composition"
+human_steps = [
+  "1. cargo add categorical-agents-rs",
+  "2. Create AgentDistribution from fleet state",
+  "3. Wrap transport result in ListMonad for non-deterministic routing"
+]
+agent_steps = [
+  "Create AgentDistribution for current fleet state",
+  "Compute OptimalTransport plan to target distribution",
+  "Wrap transport plan in ListMonad for alternative routing exploration",
+  "Use StreamComonad for context-aware transport decisions"
+]
+
+[onboarding.human]
+quick_start = "cargo add wasserstein-agents"
+example = """
+use wasserstein_agents::{AgentDistribution, SinkhornSolver, sliced_wasserstein_2};
+
+let source = AgentDistribution::uniform(3, 2); // 3 agents in 2D
+let target = AgentDistribution::from_weights(vec![0.5, 0.3, 0.2], vec![[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]);
+
+let solver = SinkhornSolver::new(0.01, 100);
+let plan = solver.solve(&source, &target);
+
+let sw_dist = sliced_wasserstein_2(&source_samples, &target_samples, 128);
+println!(\"Sliced W2 distance: {}\", sw_dist);
+"""
+
+[onboarding.agent]
+context_needed = ["num_agents", "distribution_dimension", "transport_regularity", "convergence_tolerance"]
+api_surface = [
+  "AgentDistribution::uniform(n, dim)",
+  "AgentDistribution::from_weights(weights, positions)",
+  "SinkhornSolver::new(reg, max_iter)",
+  "SinkhornSolver::solve(source, target) -> TransportPlan",
+  "barycenter_1d_quantile(distributions, weights)",
+  "barycenter_sinkhorn(distributions, weights, reg)",
+  "dist_w2(a, b)",
+  "JKOScheme::new(gradient_fn, dt)",
+  "sliced_wasserstein_1(a, b, num_projections)",
+  "sliced_wasserstein_2(a, b, num_projections)"
+]
+integration_pattern = "Define agent distributions, compute optimal transport plans via Sinkhorn, measure distribution distances with Wasserstein or sliced Wasserstein, evolve distributions via JKO gradient flow"
