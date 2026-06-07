@@ -1,0 +1,9 @@
+[package]
+name = "wasserstein-agents"
+version = "0.1.0"
+edition = "2021"
+description = "Wasserstein distance, optimal transport, and agent distribution coordination"
+license = "MIT"
+keywords = ["wasserstein", "optimal-transport", "sinkhorn", "agents", "gradient-flow"]
+categories = ["mathematics", "science"]
+repository = "https://github.com/SuperInstance/wasserstein-agents"
