@@ -15,9 +15,13 @@
 //! - **JKO scheme**: Wasserstein gradient flow for distribution evolution
 
 mod agents;
+mod barycenter;
 mod gradient_flow;
+mod sliced;
 mod transport;
 
 pub use agents::AgentDistribution;
+pub use barycenter::{barycenter_1d_quantile, barycenter_free_support, barycenter_sinkhorn, dist_w2};
 pub use gradient_flow::JKOScheme;
+pub use sliced::{sliced_wasserstein_1, sliced_wasserstein_2, sliced_wasserstein_custom};
 pub use transport::{OptimalTransport, SinkhornSolver};
