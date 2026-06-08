@@ -1,93 +1,157 @@
-# Integration Guide: wasserstein-agents
+# INTEGRATION.md — wasserstein-agents-rs × spectral-fleet-rs × categorical-agents-rs
 
-## What This Crate Provides
+**Wasserstein agents** coordinate multi-agent fleets via optimal transport,
+earth-mover distances, and JKO gradient flows. They connect to spectral
+methods for embedding distributions and to category theory for composing
+transport plans monadically.
 
-- **`AgentDistribution`** — Probability distribution over agent states with positions and weights; supports uniform/weighted creation, mean, Wasserstein distance
-- **`SinkhornSolver`** — Entropy-regularized optimal transport via Sinkhorn-Knopp iterations; produces transport matrices T[i][j]
-- **`OptimalTransport`** — Transport plan computation between distributions
-- **`JKOScheme`** — Wasserstein gradient flow via Jordan-Kinderlehrer-Otto scheme; evolves distributions toward minima
-- **`barycenter_1d_quantile`**, **`barycenter_sinkhorn`**, **`barycenter_free_support`** — Wasserstein barycenters (Fréchet means in Wasserstein space)
-- **`sliced_wasserstein_1`**, **`sliced_wasserstein_2`**, **`sliced_wasserstein_custom`** — Sliced Wasserstein distances for fast approximation
+## Synergy Map
 
-This crate provides optimal transport, Wasserstein distances, and distribution coordination for multi-agent fleets. It measures how different two agent distributions are (not just pointwise, but geometrically) and computes the optimal way to transform one into another.
-
-## How to Add This Crate
-
-```bash
-cargo add wasserstein-agents
 ```
+spectral-fleet-rs              wasserstein-agents-rs          categorical-agents-rs
+┌──────────────────┐           ┌──────────────────────┐       ┌─────────────────────┐
+│ l2_norm           │◄─────────►│ AgentDistribution    │◄─────►│ StateMonad          │
+│ normalize         │           │ SinkhornSolver       │       │ ListMonad           │
+│ SpectralCluster   │           │ OptimalTransport     │       │ MaybeMonad          │
+│ kmeans            │           │ JKOScheme            │       │ Adjunction          │
+└──────────────────┘           └──────────────────────┘       └─────────────────────┘
+```
+
+## Key Insight
+
+Agent fleets are probability distributions over state space. Optimal
+transport tells you the cheapest way to reconfigure one fleet into
+another. Spectral clustering groups similar agents before transport,
+reducing computational cost. Monadic composition lets you chain transport
+plans like state transitions.
+
+## Example 1: Spectral Pre-Clustering Before Transport
+
+Group agents by similarity, then compute transport between cluster
+centroids rather than individual agents.
 
 ```rust
-use wasserstein_agents::AgentDistribution;
-use wasserstein_agents::SinkhornSolver;
+use spectral_fleet::kmeans::kmeans;
+use wasserstein_agents::agents::AgentDistribution;
+use wasserstein_agents::transport::OptimalTransport;
+use rand::thread_rng;
 
-let source = AgentDistribution::uniform(vec![vec![0.0, 0.0], vec![1.0, 0.0]]);
-let target = AgentDistribution::uniform(vec![vec![1.0, 0.0], vec![2.0, 0.0]]);
+fn clustered_transport(source: &AgentDistribution, target: &AgentDistribution) {
+    let mut rng = thread_rng();
 
-let solver = SinkhornSolver::new(0.1); // regularization ε
-let cost = source.cost_matrix(&target);
-let plan = solver.solve(&cost, &source.weights, &target.weights);
-println!("Transport plan: {:?}", plan);
+    // Cluster source agents
+    let source_clusters = kmeans(&source.positions, 3, 50, &mut rng).unwrap();
+    println!("Source cluster labels: {:?}", source_clusters.labels);
+
+    // Build centroid-to-centroid cost matrix
+    let mut cost = vec![vec![0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            let d: f64 = source_clusters.centroids[i].iter()
+                .zip(&target.positions[j % target.positions.len()])
+                .map(|(a, b)| (a - b).powi(2))
+                .sum();
+            cost[i][j] = d.sqrt();
+        }
+    }
+
+    let source_weights = vec![1.0 / 3.0; 3];
+    let target_weights = vec![1.0 / 3.0; 3];
+    let w2 = OptimalTransport::wasserstein_2(&cost, &source_weights, &target_weights);
+    println!("Clustered W2 distance: {:.4}", w2);
+}
 ```
 
-## Integration Points
+## Example 2: JKO Gradient Flow with Monadic State Tracking
 
-### categorical-agents
-
-- **Why**: categorical-agents provides the composition algebra; wasserstein-agents provides the metric for measuring how far a composed agent distribution is from its target. Monadic composition produces intermediate distributions; Wasserstein distance quantifies progress.
-- **How**: After composing agent behaviors categorically, use `SinkhornSolver` to measure the Wasserstein distance between the composed distribution and the desired target distribution.
+Evolve a distribution toward a target using JKO flow, tracking the
+intermediate states with the state monad.
 
 ```rust
-use wasserstein_agents::AgentDistribution;
-use wasserstein_agents::barycenter::dist_w2;
+use wasserstein_agents::gradient_flow::JKOScheme;
+use wasserstein_agents::agents::AgentDistribution;
+use categorical_agents::monad::StateMonad;
 
-// Measure improvement after categorical composition
-let before = AgentDistribution::uniform(vec![vec![0.0], vec![1.0], vec![2.0]]);
-let after = AgentDistribution::weighted(
-    vec![vec![0.2], vec![0.8], vec![1.8]],
-    vec![0.33, 0.33, 0.34],
-);
+fn monadic_flow(initial: &AgentDistribution) -> Vec<AgentDistribution> {
+    let jko = JKOScheme::new(0.1, 20, 0.01);
 
-let improvement = dist_w2(&before, &after);
-println!("Distribution shifted by W₂ = {:.4}", improvement);
+    // Gradient of quadratic potential: V(x) = |x|^2 / 2
+    let grad_v = |x: &[f64]| x.iter().map(|&xi| xi).collect();
+
+    let trajectory = jko.flow_with_potential(initial, grad_v);
+
+    // Track total Wasserstein distance traveled via state monad
+    let dist_state = StateMonad::new(|acc: f64| {
+        let total: f64 = jko.wasserstein_trajectory(&trajectory).iter().sum();
+        (total, acc + total)
+    });
+
+    let (total_dist, _) = dist_state.eval(0.0);
+    println!("Total Wasserstein distance traveled: {:.4}", total_dist);
+    trajectory
+}
 ```
 
-### persistent-sheaf
+## Example 3: Optimal Assignment Between Fleets
 
-- **Why**: persistent-sheaf provides topological data analysis via persistent sheaf cohomology; wasserstein-agents provides the geometric transport. Together: topology reveals structure, transport optimizes movement through that structure.
-- **How**: Use persistent-sheaf's `SimplicialComplex` to discover topological structure in agent distributions, then use wasserstein-agents' `SinkhornSolver` to compute optimal transport plans that respect the discovered topology.
+Compute the optimal assignment matrix between two agent fleets and use it
+to guide rebalancing.
 
 ```rust
-use wasserstein_agents::AgentDistribution;
-use wasserstein_agents::SinkhornSolver;
+use wasserstein_agents::agents::AgentDistribution;
+use wasserstein_agents::transport::SinkhornSolver;
 
-// Agent positions → sheaf stalks → transport respects topology
-let fleet = AgentDistribution::uniform(vec![
-    vec![0.0, 0.0], vec![1.0, 0.0], vec![0.5, 0.866],
-]);
+fn optimal_rebalancing_plan(fleet_a: &AgentDistribution, fleet_b: &AgentDistribution) {
+    let cost = fleet_a.cross_cost_matrix(fleet_b);
+    let n = fleet_a.len();
+    let weights = vec![1.0 / n as f64; n];
 
-let target = AgentDistribution::uniform(vec![
-    vec![0.5, 0.0], vec![1.5, 0.0], vec![1.0, 0.866],
-]);
+    let solver = SinkhornSolver::new(0.01);
+    let plan = solver.solve(&cost, &weights, &weights);
 
-let solver = SinkhornSolver::new(0.05);
-let cost = fleet.cost_matrix(&target);
-let plan = solver.solve(&cost, &fleet.weights, &target.weights);
+    let transport_cost = SinkhornSolver::transport_cost(&plan, &cost);
+    println!("Optimal transport cost: {:.4}", transport_cost);
+
+    // Plan[i][j] tells us how much of agent i's "mass" should move to agent j
+    for i in 0..n.min(5) {
+        for j in 0..n.min(5) {
+            if plan[i][j] > 1e-3 {
+                println!("Move {:.3} from agent {} to agent {}", plan[i][j], i, j);
+            }
+        }
+    }
+}
 ```
 
-## For AI Agents
+## Cargo.toml Wiring
 
-- **Context needed**: Source and target agent positions, cost function (usually Euclidean distance), regularization parameter ε
-- **Key imports**: `wasserstein_agents::{AgentDistribution, SinkhornSolver, JKOScheme}`
-- **Integration pattern**: Create `AgentDistribution` → compute cost matrix → run `SinkhornSolver::solve()` → extract transport plan → measure improvement with W₂ distance
-- **Error handling**: Sinkhorn iterations may not converge if ε is too small — increase regularization or max_iterations. Empty distributions return empty transport plans.
+```toml
+[dependencies]
+wasserstein-agents = { git = "https://github.com/SuperInstance/wasserstein-agents-rs" }
+spectral-fleet = { git = "https://github.com/SuperInstance/spectral-fleet-rs" }
+categorical-agents = { git = "https://github.com/SuperInstance/categorical-agents-rs" }
+```
 
-## For Humans
+## Design Patterns
 
-- **Prerequisites**: Basic optimal transport theory, Wasserstein distance concept, understanding of entropy regularization
-- **Learning path**: Start with `transport.rs` (Sinkhorn algorithm), then `agents.rs` (agent distributions), then `gradient_flow.rs` (JKO scheme), then `barycenter.rs` (multi-distribution means)
-- **Common pitfalls**:
-  - Regularization ε too small → numerical instability (division by near-zero); too large → blurry transport plans
-  - `AgentDistribution::uniform()` normalizes weights to sum to 1.0 — don't pass pre-normalized weights
-  - JKO `flow_to_origin()` uses a fixed quadratic potential — for custom potentials, extend the `JKOScheme`
-  - Sliced Wasserstein is an approximation — use full Sinkhorn for exact distances when n < 100
+### Pattern: Multi-Scale Fleet Reconfiguration
+
+Use JKO flow at coarse scale, then Sinkhorn at fine scale:
+
+```rust
+use wasserstein_agents::gradient_flow::JKOScheme;
+use wasserstein_agents::transport::SinkhornSolver;
+use wasserstein_agents::agents::AgentDistribution;
+
+fn multiscale_reconfigure(fleet: &AgentDistribution, target: &AgentDistribution) {
+    let jko = JKOScheme::new(0.2, 10, 0.05);
+    let coarse = jko.flow_to_origin(fleet);
+    let final_dist = coarse.last().unwrap();
+
+    let cost = final_dist.cross_cost_matrix(target);
+    let solver = SinkhornSolver::new(0.01);
+    let plan = solver.solve(&cost, &fleet.weights, &target.weights);
+    println!("Fine-scale transport cost: {:.4}",
+        SinkhornSolver::transport_cost(&plan, &cost));
+}
+```
